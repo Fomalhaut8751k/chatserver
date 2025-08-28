@@ -188,7 +188,7 @@ int main(int argc, char** argv)
                 cin.getline(pwd, 50);
 
                 json js;
-                // {"msgid": 3, "name": "yezhenhao", "password": "123456"}
+                // {"msgid": 3, "name": "van", "password": "123456"}
                 js["msgid"] = REG_MSG;
                 js["name"] = name;
                 js["password"] = pwd;
@@ -289,7 +289,7 @@ void mainMenu(int id, string name, bool& user_online, int clientfd)
         }break;
         case 3:  // 添加好友
         {
-            // {"msgid": 6, "id": 17, "from": "zhaozhendong", "friendid": 16}
+            // {"msgid": 6, "id": 17, "from": "van", "friendid": 16}
             cerr << "> please enter the ID of the friend you want to add: " ;
             int friendid = 0;
             cin >> friendid;
@@ -307,17 +307,28 @@ void mainMenu(int id, string name, bool& user_online, int clientfd)
 
             int len = send(clientfd, request_str.c_str(), strlen(request_str.c_str()) + 1, 0);
 
-            if(len >= 1)
+            // if(len >= 1)
+            // {
+            //     cerr << "added friend successfully!!!" << endl;
+            //     pauseProgram();
+            //     system("clear"); 
+            // }
+
+            char buffer[1024] = {0};
+            len = recv(clientfd, buffer, 1024, 0);
+            if(len > 1 && json::parse(buffer)["errno"] == 0)
             {
                 cerr << "added friend successfully!!!" << endl;
-                pauseProgram();
-                system("clear"); 
+            }
+            else
+            {
+                cerr << "added friend failed!!!" << endl;
             }
 
         }break;
         case 4:  // 添加群组
         {
-            // {"msgid": 11, "id": 17, "name": "wudongwei",  "groupid": 2}
+            // {"msgid": 11, "id": 17, "name": "van",  "groupid": 2}
             cerr << "> please enter the ID of the group you want to add: " ;
             int groupid = 0;
             cin >> groupid;
@@ -334,17 +345,28 @@ void mainMenu(int id, string name, bool& user_online, int clientfd)
 
             int len = send(clientfd, request_str.c_str(), strlen(request_str.c_str()) + 1, 0);
 
-            if(len >= 1)
+            // if(len >= 1)
+            // {
+            //     cerr << "added group successfully!!!" << endl;
+            //     pauseProgram();
+            //     system("clear");
+            // }
+
+            char buffer[1024] = {0};
+            len = recv(clientfd, buffer, 1024, 0);
+            if(len > 1 && json::parse(buffer)["errno"] == 0)
             {
                 cerr << "added group successfully!!!" << endl;
-                pauseProgram();
-                system("clear");
+            }
+            else
+            {
+                cerr << "added group failed!!!" << endl;
             }
 
         }break;
         case 5:
         {
-            // {"msgid": 9, "id": 16, "name": "nanliang", "desc": "houjingzhiluan"}
+            // {"msgid": 9, "id": 16, "name": "group1", "desc": "this is a group for..."}
             string groupname = "";
             cerr << "please enter the name of the group you want to create: ";
             cin >> groupname;
@@ -367,13 +389,24 @@ void mainMenu(int id, string name, bool& user_online, int clientfd)
 
             int len = send(clientfd, request_str.c_str(), strlen(request_str.c_str()) + 1, 0);
 
-            if(len >= 1)
+            // if(len >= 1)
+            // {
+            //     cerr << "create group successfully!!!" << endl;
+            //     pauseProgram();
+            //     system("clear");
+            // }
+
+            char buffer[1024] = {0};
+            len = recv(clientfd, buffer, 1024, 0);
+            if(len > 1 && json::parse(buffer)["errno"] == 0)
             {
                 cerr << "create group successfully!!!" << endl;
-                pauseProgram();
-                system("clear");
             }
-            
+            else
+            {
+                cerr << "create group failed!!!" << endl;
+            }
+
 
         }break;
         default:
@@ -635,8 +668,8 @@ void groupMenu(int id, string name, bool& show_group, int clientfd)
                 groupChatMenu(group, name, id, clientfd, chat_group);
             }
 
-            // {"msgid": 12, "id": 17, "from": "qiudoumadai", "togroup": 2, "msg": "yezhenhaoshixiaonanliang"}
-            // {"msgid": 5, "id": 19, "from": "shuoshuo", "to": 17, "msg": "wudongwei chulie!"}
+            // {"msgid": 12, "id": 17, "from": "van", "togroup": 2, "msg": "I am an artist"}
+            // {"msgid": 5, "id": 19, "from": "bili", "to": 17, "msg": "wushuangdahuanggua"}
             system("clear"); 
             json js_exit;
             js_exit["msgid"] = 5;
@@ -678,7 +711,7 @@ void chatMenu(User user, string name, int id, int clientfd, bool& chat_friend)
     }
 
     json message;
-    // {"msgid": 5, "id": 19, "from": "shuoshuo", "to": 17, "msg": "wudongwei chulie!"}
+    // {"msgid": 5, "id": 19, "from": "van", "to": 17, "msg": "deep dark fantasies"}
     message["msgid"] = 5;
     message["id"] = id;
     message["from"] = name;
@@ -710,7 +743,7 @@ void groupChatMenu(Group group, string name, int id, int clientfd, bool& chat_fr
     }
 
     json message;
-    // {"msgid": 12, "id": 17, "from": "qiudoumadai", "togroup": 2, "msg": "yezhenhaoshixiaonanliang"}
+    // {"msgid": 12, "id": 17, "from": "van", "togroup": 2, "msg": "i am hired for people"}
     message["msgid"] = 12;
     message["id"] = id;
     message["from"] = name;
@@ -726,7 +759,7 @@ void groupChatMenu(Group group, string name, int id, int clientfd, bool& chat_fr
 // 从字符串中获取好友信息
 User getMsgFromString(string msg_str)
 {
-    // " id: 17 name: wudongwei state: offline"
+    // " id: 17 name: van state: offline"
     int id_start_index = msg_str.find("id: ") + 4;
     int id_end_index = msg_str.find(" name: ") - 1;
 
@@ -748,7 +781,7 @@ User getMsgFromString(string msg_str)
 // 从字符串中获取群组信息
 Group getMsgFromGroupString(string msg_str)
 {
-    // " group id: 2, group name: nanliang, group desc: houjingzhiluan"
+    // " group id: 2, group name: group2, group desc: 111"
     int group_id_start_index = msg_str.find("group id: ") + 10;
     int group_id_end_index = msg_str.find("group name: ") - 1;
 
@@ -773,7 +806,7 @@ void readTaskHandler(int clientfd)
     while(1)
     {
         char buffer[1024] = {0};
-        // {"msgid": 5, "id": 19, "from": "shuoshuo", "to": 17, "msg": "wudongwei chulie!"}
+        // {"msgid": 5, "id": 19, "from": "van", "to": 17, "msg": "111"}
         int len = recv(clientfd, buffer, 1024, 0);
         if(len == -1 || len == 0)
         {
@@ -788,7 +821,7 @@ void readTaskHandler(int clientfd)
         }
         if(ONE_CHAT_MSG == js["msgid"].get<int>())
         {
-            // {"msgid": 5, "id": 19, "from": "shuoshuo", "to": 17, "msg": "昔朕以龙骧建业，未尝轻以授人，卿其勉之"}
+            // {"msgid": 5, "id": 19, "from": "苻坚", "to": 17, "msg": "昔朕以龙骧建业，未尝轻以授人，卿其勉之"}
             cerr << "[" << js["from"] << "]: " << js["msg"] << endl; 
             cerr << "> ";
         }
@@ -817,7 +850,7 @@ void readGroupTaskHandler(int clientfd, int id)
         }
         if(GROUP_CHAT_MSG == js["msgid"].get<int>())
         {
-            // {"msgid": 12, "id": 17, "from": "qiudoumadai", "togroup": 2, "msg": "yezhenhaoshixiaonanliang"}
+            // {"msgid": 12, "id": 17, "from": "van", "togroup": 2, "msg": "123"}
             cerr << "[" << js["from"] << "]: " << js["msg"] << endl; 
             cerr << "> ";
         }

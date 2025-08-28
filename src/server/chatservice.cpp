@@ -146,14 +146,14 @@ void ChatService::reg(const TcpConnectionPtr& conn, json& js, Timestamp)
         response["id"] = user.getId();
         conn->send(response.dump());
     }
-    else
-    {
-        // 注册失败
-        json response;
-        response["msgid"] = REG_MSG_ACK;
-        response["errno"] = 1;
-        conn->send(response.dump());
-    }
+    // else
+    // {
+    //     // 注册失败
+    //     json response;
+    //     response["msgid"] = REG_MSG_ACK;
+    //     response["errno"] = 1;
+    //     conn->send(response.dump());
+    // }
 }
 
 // 一对一聊天业务
@@ -313,7 +313,7 @@ bool ChatService::addFriend(const TcpConnectionPtr& conn, json& js, Timestamp)
     
     response["msgid"] = 7;
     response["errno"] = 1;
-    response["errmsg"] = "add friend failes! this id is not exist!";
+    response["errmsg"] = "add friend failed! this id is not exist!";
     conn->send(response.dump());
 
     return false;
