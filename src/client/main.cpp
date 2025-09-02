@@ -5,6 +5,11 @@
 #include <vector>
 #include <chrono>
 #include <ctime>
+#include <mutex>
+#include <condition_variable>
+
+std::mutex mtx;
+std::condition_variable cv;
 
 #include <cstdlib>
 
@@ -28,12 +33,25 @@ void pauseProgram() {
     std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 }
 
+unordered_map<string, int> status = {
+    // 指示用户当前的聊天状态(不在聊天，某个好友聊天，某个群聊聊天)
+    make_pair("friend", -1),
+    make_pair("group", -1)
+};
+
+
 // 记录当前系统登陆的用户信息
 User g_currentUser;
-// 记录当前登陆用户的好友列表信息
-vector<User> g_currentUserFriendList;
-// 记录当前登陆用户的群组列表信息
-vector<Group> g_currentUserGroupList;
+// 好友列表
+unordered_map<int, User> friend_list;
+// 群聊列表
+unordered_map<int, Group> group_list;
+
+// 记录用户接收到的好友消息
+unordered_map<int, vector<json>> friendMessageSet;  // id , message
+// 记录用户接收到的群聊消息
+unordered_map<int, vector<json>> groupMessageSet;  // groupid , message
+
 // 显示当前登陆成功用户的基本信息
 void showCurrentUserData();
 
@@ -59,6 +77,9 @@ void groupChatMenu(Group group, string name, int id, int clientfd, bool& chat_fr
 void readTaskHandler(int clientfd);
 // 多人聊天接受线程
 void readGroupTaskHandler(int clientfd, int id);
+
+// 聊天消息和响应消息处理线程
+void chatAndResponseHandler(int clientfd, int id);
 
 
 int main(int argc, char** argv)
@@ -131,12 +152,13 @@ int main(int argc, char** argv)
 
                 cerr << js.dump() << endl;
 
+                // 发送给客户端处理登陆业务
                 int len = send(clientfd, request.c_str(), strlen(request.c_str()) + 1, 0);
                 if(len == -1)
                 {
                     cerr << "send login msg error: " << request << endl; 
                 }
-                else
+                else  // 无论登录成功与否，服务器都会想客户端发送消息send()
                 {
                     char buffer[1024] = {0};
                     len = recv(clientfd, buffer, 1024, 0);
@@ -168,6 +190,10 @@ int main(int argc, char** argv)
 
                             // 登陆状态
                             bool user_online = true;
+
+                            std::thread readTask(chatAndResponseHandler, clientfd,id);
+                            readTask.detach();
+
                             while(user_online)
                             {
                                 mainMenu(g_currentUser.getId(), g_currentUser.getName(), user_online, clientfd);
@@ -345,26 +371,8 @@ void mainMenu(int id, string name, bool& user_online, int clientfd)
 
             int len = send(clientfd, request_str.c_str(), strlen(request_str.c_str()) + 1, 0);
 
-            // if(len >= 1)
-            // {
-            //     cerr << "added group successfully!!!" << endl;
-            //     pauseProgram();
-            //     system("clear");
-            // }
-
-            char buffer[1024] = {0};
-            len = recv(clientfd, buffer, 1024, 0);
-            if(len > 1 && json::parse(buffer)["errno"] == 0)
-            {
-                cerr << "added group successfully!!!" << endl;
-            }
-            else
-            {
-                cerr << "added group failed!!!" << endl;
-            }
-
         }break;
-        case 5:
+        case 5:  // 加入群聊
         {
             // {"msgid": 9, "id": 16, "name": "group1", "desc": "this is a group for..."}
             string groupname = "";
@@ -385,28 +393,7 @@ void mainMenu(int id, string name, bool& user_online, int clientfd)
 
             string request_str = js.dump();
 
-            // cerr << request_str << endl;
-
             int len = send(clientfd, request_str.c_str(), strlen(request_str.c_str()) + 1, 0);
-
-            // if(len >= 1)
-            // {
-            //     cerr << "create group successfully!!!" << endl;
-            //     pauseProgram();
-            //     system("clear");
-            // }
-
-            char buffer[1024] = {0};
-            len = recv(clientfd, buffer, 1024, 0);
-            if(len > 1 && json::parse(buffer)["errno"] == 0)
-            {
-                cerr << "create group successfully!!!" << endl;
-            }
-            else
-            {
-                cerr << "create group failed!!!" << endl;
-            }
-
 
         }break;
         default:
@@ -432,8 +419,6 @@ void friendMenu(int id, string name, bool& show_friend, int clientfd)
     cerr << "Hello, " << name << " (" << id << ")" << endl;
     cerr << "==============================" << endl;
 
-    unordered_map<int, User> friend_list;
-
     json js;
     // {"msgid": 8, "id": 16}
     js["msgid"] = 8;
@@ -442,109 +427,109 @@ void friendMenu(int id, string name, bool& show_friend, int clientfd)
     string request = js.dump();
 
     // cerr << request << endl;
+    friend_list.clear();
 
     int len = send(clientfd, request.c_str(), strlen(request.c_str()) + 1, 0);
     if(len == -1)
     {
         cerr << "send show friends msg error: " << request << endl;
     }
-    else
+    else  // 如果发送成功
     {
-        char buffer[1024] = {0};
-        len = recv(clientfd, buffer, 1024, 0);
-        if(-1 == len)
         {
-            cerr << "recv show friends response error" << endl;
+            std::unique_lock<std::mutex> lck(mtx);
+            // char buffer[1024] = {0};
+            // len = recv(clientfd, buffer, 1024, 0);
+            cv.wait(lck);  // 等待，先阻塞，等消息接收线程处理完毕   
         }
-        else
+
+        cerr << "------------------------------" << endl;
+        cerr << "[1]. chat with friend" << endl;
+        cerr << "[2]. update friend state" << endl;
+        cerr << "[3]. exit" << endl;
+        cerr << "==> choice: ";
+
+        int choice = 0;
+        cin >> choice;
+        cin.get();  // 读掉缓冲区残留的回车
+
+        switch(choice)
         {
-            int index = 0;
-            json js = json::parse(buffer);
-            for (auto& [key, value] : js.items()) 
-            {   
-                if(key.substr(0, 6) == "friend")
-                {
-                    cerr << value << endl;
-
-                    User user = getMsgFromString(value.dump());
-
-                    friend_list.insert({user.getId(), user});
-                    
-                    index++;
-                }
-            }
-
-            cerr << index << " people in total." << endl;
-            cerr << "------------------------------" << endl;
-            cerr << "[1]. chat with friend" << endl;
-            cerr << "[2]. update friend state" << endl;
-            cerr << "[3]. exit" << endl;
-            cerr << "==> choice: ";
-
-            int choice = 0;
-            cin >> choice;
-            cin.get();  // 读掉缓冲区残留的回车
-
-            switch(choice)
+            case 1:
             {
-                case 1:
+                int friendid = -1;
+                cerr << "==> chat with friend whose id is: " << endl;
+                cin >> friendid;
+                cin.get();  // 读掉缓冲区残留的回车
+
+                if(friend_list.find(friendid) == friend_list.end())  // 退出操作
                 {
-                    int friendid = -1;
-                    cerr << "==> chat with friend whose id is: " << endl;
-                    cin >> friendid;
-                    cin.get();  // 读掉缓冲区残留的回车
-
-                    if(friend_list.find(friendid) == friend_list.end())  // 退出操作
-                    {
-                        cerr << "this id of friend is not exist" << endl;
-                        return;
-                    }
-
-                    bool chat_friend = true;
-                    User user = friend_list[friendid];
-
-                    system("clear"); 
-                    cerr << "==============================" << endl;
-                    cerr << "Hello, " << name << " (" << id << ")" << endl;
-                    cerr << "==============================" << endl;
-                    cerr << "@ " << user.getName() << " " << user.getId() << ":" << endl;
-
-
-                    std::thread readTask(readTaskHandler, clientfd);
-
-                    while(chat_friend)
-                    {          
-                        chatMenu(user, name, id, clientfd, chat_friend);
-                    }
-                    system("clear"); 
-                    json js;
-                    js["msgid"] = 5;
-                    js["id"] = id;
-                    js["from"] = "";
-                    js["to"] = id;
-                    js["msg"] = "exit()";
-
-                    string request = js.dump();
-
-                    // cerr << request << endl;
-                    int len = send(clientfd, request.c_str(), strlen(request.c_str()) + 1, 0);
-
-                    readTask.join();
-
-                    // groupMenu(id, name, chat_friend, clientfd);
-
-                }break;
-                case 2:
-                {
-                    
-                }break;
-                case 3:
-                {
-                    show_friend = false;
+                    cerr << "this id of friend is not exist" << endl;
                     return;
                 }
+
+                bool chat_friend = true;
+                User user = friend_list[friendid];
+                
+                // 设置用户当前打开的是哪个好友的聊天页面
+                status["friend"] = friendid;
+
+                system("clear"); 
+                cerr << "==============================" << endl;
+                cerr << "Hello, " << name << " (" << id << ")" << endl;
+                cerr << "==============================" << endl;
+
+                cerr << "@ " << user.getName() << " " << user.getId() << ":" << endl;
+                
+                // 把离线消息打印出来：
+
+                // 把非窗口消息打印出来：
+                for(json& js: friendMessageSet[friendid])
+                {
+                    cerr << "> ";
+                    cerr << "[" << js["from"] << "]: " << js["msg"] << endl;    
+                }
+                // 清理打印出来的消息
+                friendMessageSet[friendid].clear();
+
+                // std::thread readTask(readTaskHandler, clientfd);
+
+                while(chat_friend)
+                {          
+                    chatMenu(user, name, id, clientfd, chat_friend);
+                }
+
+                status["friend"] = -1;
+                
+                system("clear"); 
+                // json js;
+                // js["msgid"] = 5;
+                // js["id"] = id;
+                // js["from"] = "";
+                // js["to"] = id;
+                // js["msg"] = "exit()";
+
+                // string request = js.dump();
+
+                // // cerr << request << endl;
+                // int len = send(clientfd, request.c_str(), strlen(request.c_str()) + 1, 0);
+
+                // readTask.join();
+
+                // groupMenu(id, name, chat_friend, clientfd);
+
+            }break;
+            case 2:
+            {
+                
+            }break;
+            case 3:
+            {
+                show_friend = false;
+                return;
             }
         }
+        
     }
 
 }
@@ -560,7 +545,7 @@ void groupMenu(int id, string name, bool& show_group, int clientfd)
     request["msgid"] = 14;
     request["id"] = id;
 
-    unordered_map<int, Group> group_list;
+    
 
     string request_str = request.dump();
     int len = send(clientfd, request_str.c_str(), strlen(request_str.c_str()) + 1, 0);
@@ -572,128 +557,116 @@ void groupMenu(int id, string name, bool& show_group, int clientfd)
         system("clear");
         return;
     }
-
-    char buffer[1024] = {0};
-    len = recv(clientfd, buffer, 1024, 0);
-    
-    int length = json::parse(buffer).size();
-    int index = 0;
-    for(auto item: json::parse(buffer))
+    // 如果发送成功
+    else
     {
-        index++;
-        if(index == length)
         {
-            break;
+            std::unique_lock<std::mutex> lck(mtx);
+            // char buffer[1024] = {0};
+            // len = recv(clientfd, buffer, 1024, 0);
+            cv.wait(lck);  // 等待，先阻塞，等消息接收线程处理完毕   
         }
-        Group group = getMsgFromGroupString(item.dump());
 
-        group_list.insert({group.getId(), group});
+        cerr << "------------------------------" << endl;
+        cerr << "[1]. chat with group" << endl;
+        cerr << "[2]. update group state" << endl;
+        cerr << "[3]. exit" << endl;
+        cerr << "==> choice: ";
 
-        
-        cerr << item << endl;
-    }
-    cerr << length - 1 << " groups in total." << endl;  
-    cerr << "------------------------------" << endl;
-    cerr << "[1]. chat with group" << endl;
-    cerr << "[2]. update group state" << endl;
-    cerr << "[3]. exit" << endl;
-    cerr << "==> choice: ";
+        int choice = 0;
+        cin >> choice;
+        cin.get();  // 读掉缓冲区残留的回车
 
-    int choice = 0;
-    cin >> choice;
-    cin.get();  // 读掉缓冲区残留的回车
-
-    switch(choice)
-    {
-        case 1:
+        switch(choice)
         {
-            int groupid = -1;
-            cerr << "==> chat with group whose id is: " << endl;
-            cin >> groupid;
-            cin.get();  // 读掉缓冲区残留的回车
-
-            if(group_list.find(groupid) == group_list.end())  // 退出操作
+            case 1:
             {
-                cerr << "this id of group is not exist" << endl;
+                int groupid = -1;
+                cerr << "==> chat with group whose id is: " << endl;
+                cin >> groupid;
+                cin.get();  // 读掉缓冲区残留的回车
+
+                if(group_list.find(groupid) == group_list.end())  // 退出操作
+                {
+                    cerr << "this id of group is not exist" << endl;
+                    return;
+                }
+
+                bool chat_group = true;
+                Group group = group_list[groupid];
+                // groupChatMenu(Group group, string name, int id, int clientfd, bool& chat_friend)
+
+                system("clear"); 
+                cerr << "==============================" << endl;
+                cerr << "Hello, " << name << " (" << id << ")" << endl;
+                cerr << "==============================" << endl;
+
+                json js;
+                js["msgid"] = 13;
+                js["id"] = id;
+                js["groupid"] = group.getId();
+
+                // 查看群组成员
+                int len = send(clientfd, js.dump().c_str(), strlen(js.dump().c_str()) + 1, 0);
+
+                {
+                    std::unique_lock<std::mutex> lck(mtx);
+                    cv.wait(lck);  // 等待，先阻塞，等消息接收线程处理完毕   
+                }
+
+                cerr << "@ " << group.getName() << " " << group.getId() << ":" << endl;
+
+                // 把非窗口消息打印出来：
+                for(json& js_e: groupMessageSet[group.getId()])
+                {
+                    cerr << "> ";
+                    cerr << "[" << js_e["from"] << "]: " << js_e["msg"] << endl;    
+                }
+                // 清楚打印后的群聊消息
+                groupMessageSet[group.getId()].clear();
+
+                // std::thread readTask(readGroupTaskHandler, clientfd, id);
+
+                status["group"] = group.getId();
+
+                while(chat_group)
+                {
+                    groupChatMenu(group, name, id, clientfd, chat_group);
+                }
+
+                // {"msgid": 12, "id": 17, "from": "van", "togroup": 2, "msg": "I am an artist"}
+                // {"msgid": 5, "id": 19, "from": "bili", "to": 17, "msg": "wushuangdahuanggua"}
+                system("clear"); 
+
+                status["group"] = -1;
+
+                // json js_exit;
+                // js_exit["msgid"] = 5;
+                // js_exit["id"] = id;
+                // js_exit["from"] = "";
+                // js_exit["to"] = id;
+                // js_exit["msg"] = "exit()";
+
+                // string request_exit = js_exit.dump();
+                // len = send(clientfd, request_exit.c_str(), strlen(request_exit.c_str()) + 1, 0);
+
+                // readTask.join();
+
+            }break;
+            case 2:
+            {
+                
+            }break;
+            case 3:
+            {
+                show_group = false;
                 return;
             }
-
-            bool chat_group = true;
-            Group group = group_list[groupid];
-            // groupChatMenu(Group group, string name, int id, int clientfd, bool& chat_friend)
-
-            system("clear"); 
-            cerr << "==============================" << endl;
-            cerr << "Hello, " << name << " (" << id << ")" << endl;
-            cerr << "==============================" << endl;
-
-            json js;
-            js["msgid"] = 13;
-            js["id"] = id;
-            js["groupid"] = group.getId();
-
-            // 查看群组成员
-            int len = send(clientfd, js.dump().c_str(), strlen(js.dump().c_str()) + 1, 0);
-            
-            char buffer[1024] = {0};
-            len = recv(clientfd, buffer, 1024, 0);
-            if(-1 == len)
-            {
-                cerr << "recv group msg response error" << endl;
-            }
-            
-            int length = json::parse(buffer).size();
-
-            int index = 0;
-
-            cerr << "group member: " << endl;
-
-            for(auto it : json::parse(buffer))
-            {   
-                index++;
-                if(index == length)
-                {
-                    break;
-                }
-                cerr << it << endl;
-            }
-            cerr << json::parse(buffer)["number"] << " member in total" << endl;
-
-            cerr << "@ " << group.getName() << " " << group.getId() << ":" << endl;
-
-            std::thread readTask(readGroupTaskHandler, clientfd, id);
-
-            while(chat_group)
-            {
-                groupChatMenu(group, name, id, clientfd, chat_group);
-            }
-
-            // {"msgid": 12, "id": 17, "from": "van", "togroup": 2, "msg": "I am an artist"}
-            // {"msgid": 5, "id": 19, "from": "bili", "to": 17, "msg": "wushuangdahuanggua"}
-            system("clear"); 
-            json js_exit;
-            js_exit["msgid"] = 5;
-            js_exit["id"] = id;
-            js_exit["from"] = "";
-            js_exit["to"] = id;
-            js_exit["msg"] = "exit()";
-
-            string request_exit = js_exit.dump();
-            len = send(clientfd, request_exit.c_str(), strlen(request_exit.c_str()) + 1, 0);
-
-            readTask.join();
-
-        }break;
-        case 2:
-        {
-            
-        }break;
-        case 3:
-        {
-            show_group = false;
-            return;
         }
+
     }
+
+    
 
 }
 
@@ -720,7 +693,6 @@ void chatMenu(User user, string name, int id, int clientfd, bool& chat_friend)
 
     string request = message.dump();
     int len = send(clientfd, request.c_str(), strlen(request.c_str()) + 1, 0);
-    
     
     // char buffer[1024] = {0};
     // len = recv(clientfd, buffer, 1024, 0);
@@ -853,6 +825,178 @@ void readGroupTaskHandler(int clientfd, int id)
             // {"msgid": 12, "id": 17, "from": "van", "togroup": 2, "msg": "123"}
             cerr << "[" << js["from"] << "]: " << js["msg"] << endl; 
             cerr << "> ";
+        }
+    }
+}
+
+// 聊天消息和响应消息处理线程
+void chatAndResponseHandler(int clientfd, int id)
+{
+    for(;;)
+    {
+        char buffer[1024] = {0};
+        
+        int len = recv(clientfd, buffer, 1024, 0);
+        if(len == -1 || len == 0)
+        {
+            close(clientfd);
+            exit(-1);
+        }
+
+        string buffer_str = buffer;
+        int right_pos = -1;
+
+        // 可能包含了多个json消息
+        while(1)
+        {
+            int new_right_pos = buffer_str.find('}', right_pos + 1);  // 查找'{'的位置
+            if(new_right_pos == string::npos)  // 如果没找到，说明照完了
+            {
+                break;
+            }
+            int new_left_pos = right_pos + 1;
+            string buffer_substr = buffer_str.substr(new_left_pos, new_right_pos - new_left_pos + 1);
+            
+            json js = json::parse(buffer_substr);
+            int msgid = js["msgid"];
+            // 如果是好友群聊消息
+            if(msgid == 5)  // 好友聊天消息
+            {
+                int friend_id = js["id"];  // 好友id
+                // 如果正好处在该好友的聊天页面,直接打印消息
+                if(status["friend"] == friend_id && status["group"] == -1)
+                {
+                    cerr << "[" << js["from"] << "]: " << js["msg"] << endl; 
+                    cerr << "> ";
+                }
+                else  // 不是就放到消息队列中
+                {
+                    std::unique_lock<std::mutex> lck(mtx);
+                    friendMessageSet[friend_id].push_back(js);
+                }       
+            }
+            else if(msgid == 12)  // 群组聊天消息
+            {
+                int group_id = js["togroup"];  // 群聊id
+                // 如好正好处在该群聊的聊天页面，直接打印消息
+                if(status["friend"] == -1 && status["group"] == group_id)
+                {
+                    cerr << "[" << js["from"] << "]: " << js["msg"] << endl; 
+                    cerr << "> ";
+                }
+                else  // 不是就放到消息队列中
+                {
+                    std::unique_lock<std::mutex> lck(mtx); 
+                    groupMessageSet[group_id].push_back(js);
+                }
+            }
+
+            // 如果是业务反馈消息
+            else
+            {
+                // 添加好友响应  msgid = 7
+                if(js["msgid"] == ADD_FRIEND_ACK)
+                {
+                    if(js["errno"] == 0)
+                    {
+                        cerr << "added friend successfully!!!" << endl;
+                    }
+                    else
+                    {
+                        cerr << "added friend failed!!!" << endl;
+                    }
+                }
+                // 查看好友列表响应 msgid = 8
+                else if(js["msgid"] == SHOW_FRIEND_ACK)
+                {
+                    // 这个消息中包含所有的好友信息
+                    int index = 0;
+                    // 打印好友信息
+                    for (auto& [key, value] : js.items()) 
+                    {   
+                        if(key.substr(0, 6) == "friend")
+                        {
+                            cerr << value << endl;
+
+                            User user = getMsgFromString(value.dump());
+
+                            friend_list.insert({user.getId(), user});
+                            
+                            index++;
+                        }
+                    }
+                    cerr << index << " people in total." << endl;
+                    cv.notify_all(); // 唤醒主线程
+                }
+                // 创建或添加群聊业务响应 msgid = 10
+                else if(js["msgid"] == CREATE_GROUP_ASK)
+                {
+                    if(json::parse(buffer_substr)["errno"] == 0)
+                    {
+                        cerr << "successfully!!!" << endl;
+                    }
+                    else
+                    {
+                        cerr << "failed!!!" << endl;
+                    }
+                }
+
+                // 查看所有群聊响应 msgid = 14
+                else if(js["msgid"] == CHECK_MY_GROUP)
+                {
+                    // 这个消息中包含加入的所有的群聊
+                    int index = 0;
+
+                    int length = json::parse(buffer_substr).size();
+
+                    // 打印所有群聊
+                    for (auto it: js) 
+                    {   
+                        index++;
+                        if(index == length)
+                        {
+                            break;
+                        }
+                        // msgid不用打印出来
+                        if(it.dump() == "14")
+                        {
+                            continue;
+                        }
+                        Group group = getMsgFromGroupString(it.dump());
+                        group_list.insert({group.getId(), group});
+                        cerr << it << endl;
+                    }
+                    cerr << js["number"] << " group in total." << endl;
+                    cv.notify_all(); // 唤醒主线程
+                }
+                // 显示群聊内部群友形信息 msgid = 13
+                else if(js["msgid"] == CHECK_GROUP_MEM)
+                {                  
+                    int length = json::parse(buffer_substr).size();
+
+                    int index = 0;
+
+                    cerr << "group member: " << endl;
+
+                    for(auto it : json::parse(buffer_substr))
+                    {   
+                        index++;
+                        if(index == length)
+                        {
+                            break;
+                        }
+                        if(it.dump() == "13")
+                        {
+                            continue;
+                        }
+                        cerr << it << endl;
+                    }
+                    cerr << json::parse(buffer)["number"] << " member in total" << endl;
+                    cv.notify_all(); // 唤醒主线程
+                }
+            }
+           
+            right_pos = new_right_pos;
         }
     }
 }

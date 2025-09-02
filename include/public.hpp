@@ -24,12 +24,12 @@ enum EnMsgType
 
     CREATE_GROUP_MSG,// 创建群组            9
     CREATE_GROUP_ASK,// 创建或添加群组响应  10
-    ADD_GROUP_MSG,   // 加入群组           11
-    GROUP_CHAT_MSG,  // 群聊天             12
-    CHECK_GROUP_MEM, // 查看该组成员       13
-    CHECK_MY_GROUP,  // 查看加入的群聊     14
+    ADD_GROUP_MSG,   // 加入群组            11
+    GROUP_CHAT_MSG,  // 群聊天              12
+    CHECK_GROUP_MEM, // 查看该组成员        13
+    CHECK_MY_GROUP,  // 查看加入的群聊      14
 
-    LOGINOUT_MSG,    // 退出登陆          15
+    LOGINOUT_MSG,    // 退出登陆           15
 };
 
 

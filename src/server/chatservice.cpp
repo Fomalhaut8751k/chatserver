@@ -207,6 +207,9 @@ void ChatService::oneChat(const TcpConnectionPtr& conn, json& js, Timestamp)
             return;
         }
 
+        cerr << js << endl;
+        cerr << js["to"] << endl;
+
         User user = _userModel.query(js["to"].get<int>());  // 通过数据库去查询
         // 如果是在线的，说明不在当前服务器上登陆
         if(user.getState() == "online")
@@ -214,10 +217,11 @@ void ChatService::oneChat(const TcpConnectionPtr& conn, json& js, Timestamp)
             _redis.publish(js["to"].get<int>(), js.dump());
             return;
         }
+        // 说明对方不在线, 就把消息放到table：offlinemessage
+        _offlineMessageModel.insert(user.getId(), js.dump());
     }
 
-    // 说明对方不在线, 就把消息放到table：offlinemessage
-    _offlineMessageModel.insert(js["to"].get<int>(), js.dump());
+    
 
     return;
 }
@@ -402,6 +406,7 @@ void ChatService::groupMemberShow(const TcpConnectionPtr& conn, json& js, Timest
     json response;
     
     int member_number = result.size();
+    response["msgid"] = CHECK_GROUP_MEM;
     response["number"] = member_number;
     int index = 1;
 
@@ -494,6 +499,7 @@ void ChatService::groupShow(const TcpConnectionPtr& conn, json& js, Timestamp)
     int userid = js["id"].get<int>();
     vector<Group> groups = _groupModel.queryGroups(userid);
     json response;
+    response["msgid"] = 14;
     response["number"] = groups.size();
     int index = 1;
     for(Group& group: groups)
