@@ -396,14 +396,59 @@ void mainMenu(int id, string name, bool& user_online, int clientfd)
             int len = send(clientfd, request_str.c_str(), strlen(request_str.c_str()) + 1, 0);
 
         }break;
-        default:
+        default:  // 退出
         {
             json js;
             js["msgid"] = 15;
             js["id"] = id;
+            
+
+            // 把所有的离线消息都转发到offlinemessage中
+            /*
+                // 记录用户接收到的好友消息
+                unordered_map<int, vector<json>> friendMessageSet;  // id , message
+                // 记录用户接收到的群聊消息
+                unordered_map<int, vector<json>> groupMessageSet;  // groupid , message
+            */
+            string msg_friend_set = "";
+            string msg_group_set = "";
+
+            // 读取好友消息
+            for(pair<int, vector<json>> item: friendMessageSet)
+            {
+                // 某个好友发送的非窗口消息集合
+                for(json js_msg: item.second)
+                {
+                    msg_friend_set += js_msg.dump();
+                }
+            }
+            /*
+                "{\"from\":\"wudongwei\",\"id\":17,\"msg\":\"握中有悬璧\",\"msgid\":5,\"to\":16}{\"from\":\"wudongwei\",
+                \"id\":17,\"msg\":\"本自荆山璆\",\"msgid\":5,\"to\":16}{\"from\":\"wudongwei\",\"id\":17,\"msg\":\"惟彼太公望\",\"msgid\":"...
+            */
+
+            // 读取群聊消息
+            for(pair<int, vector<json>> item: groupMessageSet)
+            {
+                // 某个群聊发送的非窗口消息集合
+                for(json js_msg: item.second)
+                {
+                    msg_group_set += js_msg.dump();
+                }
+            }
+
+            js["msgfriendset"] = msg_friend_set;
+            js["msggroupset"] = msg_group_set;
+
             string request = js.dump();
 
             int len = send(clientfd, request.c_str(), strlen(request.c_str()) + 1, 0); 
+
+            // 清空好友列表，群聊列表，非窗口消息，以防止当期客户端更换账号登录时出错
+            friend_list.clear();
+            group_list.clear();
+            friendMessageSet.clear();
+            groupMessageSet.clear();
 
             user_online = false;
             return;
@@ -482,6 +527,20 @@ void friendMenu(int id, string name, bool& show_friend, int clientfd)
                 cerr << "@ " << user.getName() << " " << user.getId() << ":" << endl;
                 
                 // 把离线消息打印出来：
+                
+                json js_for_offlinemessage;
+                js_for_offlinemessage["msgid"] = OFFLINE_MSG_GET;
+                js_for_offlinemessage["id"] = id;
+                js_for_offlinemessage["friendid"] = friendid;
+                js_for_offlinemessage["groupid"] = -1;
+
+                // 向服务器申请访问某个好友对应的离线消息
+                int len = send(clientfd, js_for_offlinemessage.dump().c_str(), strlen(js_for_offlinemessage.dump().c_str())+1, 0);
+               
+                {
+                    std::unique_lock<std::mutex> lck(mtx);
+                    cv.wait(lck);  // 等待，先阻塞，等消息接收线程处理完毕   
+                }
 
                 // 把非窗口消息打印出来：
                 for(json& js: friendMessageSet[friendid])
@@ -502,21 +561,6 @@ void friendMenu(int id, string name, bool& show_friend, int clientfd)
                 status["friend"] = -1;
                 
                 system("clear"); 
-                // json js;
-                // js["msgid"] = 5;
-                // js["id"] = id;
-                // js["from"] = "";
-                // js["to"] = id;
-                // js["msg"] = "exit()";
-
-                // string request = js.dump();
-
-                // // cerr << request << endl;
-                // int len = send(clientfd, request.c_str(), strlen(request.c_str()) + 1, 0);
-
-                // readTask.join();
-
-                // groupMenu(id, name, chat_friend, clientfd);
 
             }break;
             case 2:
@@ -615,6 +659,21 @@ void groupMenu(int id, string name, bool& show_group, int clientfd)
                 }
 
                 cerr << "@ " << group.getName() << " " << group.getId() << ":" << endl;
+                // 把离线消息打印出来：
+                
+                json js_for_offlinemessage;
+                js_for_offlinemessage["msgid"] = OFFLINE_MSG_GET;
+                js_for_offlinemessage["id"] = id;
+                js_for_offlinemessage["friendid"] = -1;
+                js_for_offlinemessage["groupid"] = group.getId();
+
+                // 向服务器申请访问某个群聊对应的离线消息
+                len = send(clientfd, js_for_offlinemessage.dump().c_str(), strlen(js_for_offlinemessage.dump().c_str())+1, 0);
+               
+                {
+                    std::unique_lock<std::mutex> lck(mtx);
+                    cv.wait(lck);  // 等待，先阻塞，等消息接收线程处理完毕   
+                }
 
                 // 把非窗口消息打印出来：
                 for(json& js_e: groupMessageSet[group.getId()])
@@ -855,6 +914,13 @@ void chatAndResponseHandler(int clientfd, int id)
                 break;
             }
             int new_left_pos = right_pos + 1;
+            // 如果下一个{在当前的}的左边，说明出现了{}的嵌套
+            int new_left_pos_check = new_left_pos;
+            while(buffer_str.find('{', new_left_pos_check + 1) < new_right_pos)
+            {
+                new_right_pos = buffer_str.find('}', new_right_pos + 1);
+                new_left_pos_check = buffer_str.find('{', new_left_pos_check + 1);
+            }
             string buffer_substr = buffer_str.substr(new_left_pos, new_right_pos - new_left_pos + 1);
             
             json js = json::parse(buffer_substr);
@@ -992,6 +1058,19 @@ void chatAndResponseHandler(int clientfd, int id)
                         cerr << it << endl;
                     }
                     cerr << json::parse(buffer)["number"] << " member in total" << endl;
+                    cv.notify_all(); // 唤醒主线程
+                }
+                // 接受服务器返回的离线消息 msgid = 17
+                else if(js["msgid"] == OFFLINE_MSG_GET)
+                {
+                    vector<string> off_msg_set = js["msgset"];
+                    for(string& msg: off_msg_set)
+                    {
+                        // cerr << msg << endl;
+                        json js_off_msg = json::parse(msg);
+                        cerr << "> ";
+                        cerr << "[" << js_off_msg["from"] << "]: " << js_off_msg["msg"] << endl;            
+                    }
                     cv.notify_all(); // 唤醒主线程
                 }
             }

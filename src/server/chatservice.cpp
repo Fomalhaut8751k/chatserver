@@ -35,6 +35,7 @@ ChatService::ChatService()
     _msgHandlerMap.insert({CHECK_GROUP_MEM, std::bind(&ChatService::groupMemberShow, this, _1, _2, _3)});
     _msgHandlerMap.insert({CHECK_MY_GROUP, std::bind(&ChatService::groupShow, this, _1, _2, _3)});
     _msgHandlerMap.insert({LOGINOUT_MSG, std::bind(&ChatService::loginout, this, _1, _2, _3)});
+    _msgHandlerMap.insert({OFFLINE_MSG_GET, std::bind(&ChatService::returnOfflineMessage, this, _1, _2, _3)});
 
     // // 连接redis服务器
     if(_redis.connect())
@@ -99,16 +100,16 @@ void ChatService::login(const TcpConnectionPtr& conn, json& js, Timestamp)
             
             conn->send(response.dump());
 
-            // 如果登陆成功，就把离线过程收到的信息都显示出来
-            vector<string> message_list = _offlineMessageModel.query(id);
-            for(string& message: message_list)
-            {
-                // string -> json
-                json jsbuf = json::parse(message); 
-                // 把离线时接受到的消息逐一从服务器发送回来
-                conn->send(jsbuf.dump());
-            }
-            _offlineMessageModel.erase(id);
+            // // 如果登陆成功，就把离线过程收到的信息都显示出来
+            // vector<string> message_list = _offlineMessageModel.query(id);
+            // for(string& message: message_list)
+            // {
+            //     // string -> json
+            //     json jsbuf = json::parse(message); 
+            //     // 把离线时接受到的消息逐一从服务器发送回来
+            //     conn->send(jsbuf.dump());
+            // }
+            // _offlineMessageModel.erase(id);
         }
     }
     else
@@ -146,14 +147,6 @@ void ChatService::reg(const TcpConnectionPtr& conn, json& js, Timestamp)
         response["id"] = user.getId();
         conn->send(response.dump());
     }
-    // else
-    // {
-    //     // 注册失败
-    //     json response;
-    //     response["msgid"] = REG_MSG_ACK;
-    //     response["errno"] = 1;
-    //     conn->send(response.dump());
-    // }
 }
 
 // 一对一聊天业务
@@ -161,34 +154,7 @@ void ChatService::oneChat(const TcpConnectionPtr& conn, json& js, Timestamp)
 {
     // {"msgid": 5, "id": 19, "from": "shuoshuo", "to": 17, "msg": "wudongwei chulie!"}
 
-    // 首先得是登录状态, 通过查找map中是否有对应的键值对
     int id = 0;
-    // auto it = _userConnMap.begin();
-    // while(it != _userConnMap.end())
-    // {
-    //     if((*it).second == conn)
-    //     {
-    //         id = (*it).first;
-    //         break;
-    //     }
-    //     it++;
-    // }
-
-    // if(it == _userConnMap.end())
-    // {
-    //     // 该账号未登录
-    //     json response;
-    //     response["msgid"] = LOGIN_MSG_ACK;
-    //     response["errno"] = 1;
-    //     conn->send(response.dump());
-    //     return;
-    // }
-
-    // json message;
-    // message["msgid"] = ONE_CHAT_MSG;
-    // message["from"] = js["from"];
-    // message["id"] = js["id"];
-    // message["msg"] = js["msg"];
 
     // 查找对应目标id的连接
     TcpConnectionPtr target_conn;
@@ -207,18 +173,21 @@ void ChatService::oneChat(const TcpConnectionPtr& conn, json& js, Timestamp)
             return;
         }
 
-        cerr << js << endl;
-        cerr << js["to"] << endl;
+        // cerr << js << endl;
+        // cerr << js["to"] << endl;
+        int from_ = js["id"].get<int>();
+        int to_ = js["to"].get<int>();
 
-        User user = _userModel.query(js["to"].get<int>());  // 通过数据库去查询
+        User user = _userModel.query(to_);  // 通过数据库去查询
         // 如果是在线的，说明不在当前服务器上登陆
         if(user.getState() == "online")
         {
-            _redis.publish(js["to"].get<int>(), js.dump());
+            _redis.publish(to_, js.dump());
             return;
         }
         // 说明对方不在线, 就把消息放到table：offlinemessage
-        _offlineMessageModel.insert(user.getId(), js.dump());
+        // _offlineMessageModel.insert(user.getId(), js.dump());
+        _offlineMessageModel.insert(to_, from_, -1, js.dump());
     }
 
     
@@ -481,7 +450,7 @@ void ChatService::groupChat(const TcpConnectionPtr& conn, json& js, Timestamp)
                 }
                 else
                 {
-                    _offlineMessageModel.insert(group_member_id, js.dump()); 
+                    _offlineMessageModel.insert(group_member_id, userid, groupid, js.dump()); 
                 }
                
             }  
@@ -519,7 +488,6 @@ void ChatService::groupShow(const TcpConnectionPtr& conn, json& js, Timestamp)
     conn->send(response.dump());
 }
 
-
 // 用户退出登录
 void ChatService::loginout(const TcpConnectionPtr& conn, json& js, Timestamp)
 {
@@ -534,6 +502,65 @@ void ChatService::loginout(const TcpConnectionPtr& conn, json& js, Timestamp)
         }
     }
 
+    string str = js.dump();
+
+    string msg_friend_set = js["msgfriendset"];
+    string msg_group_set = js["msggroupset"];
+
+    // 如果有未查看的来自好友的非窗口消息
+    if(msg_friend_set != "")
+    {
+        int right_pos = -1;
+        while(1)
+        {
+            int new_right_pos = msg_friend_set.find('}', right_pos + 1);  // 查找'{'的位置
+            if(new_right_pos == string::npos)  // 如果没找到，说明照完了
+            {
+                break;
+            }
+            int new_left_pos = right_pos + 1;
+            string msg = msg_friend_set.substr(new_left_pos, new_right_pos - new_left_pos + 1);
+
+            json js_msg = json::parse(msg); 
+            /*
+                {"from":"liukun","id":16,"msg":"握中有悬璧","msgid":5,"to":17}
+                {"from":"liukun","id":16,"msg":"本自荆山璆","msgid":5,"to":17}
+            */
+            int msgid = js_msg["msgid"].get<int>();  // 5
+            int from_ = js_msg["id"].get<int>();
+            int to_ = js_msg["to"].get<int>();
+            _offlineMessageModel.insert(to_, from_, -1, msg);
+            right_pos = new_right_pos;
+        }
+    }
+    // 如果有未查看的来自群聊的非窗口消息
+    if(msg_group_set != "")
+    {
+        int right_pos = -1;
+        while(1)
+        {
+            int new_right_pos = msg_group_set.find('}', right_pos + 1);  // 查找'{'的位置
+            if(new_right_pos == string::npos)  // 如果没找到，说明照完了
+            {
+                break;
+            }
+            int new_left_pos = right_pos + 1;
+            string msg = msg_group_set.substr(new_left_pos, new_right_pos - new_left_pos + 1);
+
+            json js_msg = json::parse(msg); 
+            /*
+                "{"from\":"liukun","id":16,"msg":"惟彼太公望","msgid":12,"togroup":1}
+                 {"from\":"liukun","id":16,"msg":"昔在渭滨叟","msgid":12,"togroup":1}"
+            */
+            int msgid = js_msg["msgid"].get<int>();  // 5
+            int from_ = js_msg["id"].get<int>();
+            int to_ = userid;
+            int togroup_ = js_msg["togroup"].get<int>();
+            _offlineMessageModel.insert(to_, from_, togroup_, msg);
+            right_pos = new_right_pos;
+        }
+    }
+
     // 用户注销，相当于下线，在redis中取消订阅通道
     _redis.unsubscribe(userid);
 
@@ -544,10 +571,60 @@ void ChatService::loginout(const TcpConnectionPtr& conn, json& js, Timestamp)
     _userModel.updateState(user);
 }
 
+// 返回用户的离线消息
+void ChatService::returnOfflineMessage(const TcpConnectionPtr& conn, json& js, Timestamp)
+{
+    int userid = js["id"].get<int>();
+    // {"msgid": 17, "id": 17, "friendid": 16, "groupid": -1}
+    // 如果是好友的，群聊id就是-1，如果是群聊的，好友id就是-1
+    if(js["friendid"] != -1)  // 如果是好友消息
+    {
+        int friend_id = js["friendid"];
+        vector<string> offmsg_set = _offlineMessageModel.query_for_friend(userid, friend_id);
+
+        json js_offmsg;
+        js_offmsg["msgid"] = OFFLINE_MSG_GET;
+        js_offmsg["msgset"] = offmsg_set;  // vector<json>可以直接作为类型
+
+        conn->send(js_offmsg.dump());
+
+        // 取出离线消息后就要把对应的消息从offlinemessage中删除掉
+        _offlineMessageModel.erase_for_friend(userid, friend_id);
+        
+        return;
+    }
+    if(js["groupid"] != -1)   // 如果是群聊消息
+    {
+        int group_id = js["groupid"];
+        vector<string> offmsg_set = _offlineMessageModel.query_for_group(userid, group_id);
+
+        json js_offmsg;
+        js_offmsg["msgid"] = OFFLINE_MSG_GET;
+        js_offmsg["msgset"] = offmsg_set;
+
+        conn->send(js_offmsg.dump());
+
+        // 取出离线消息后就要把对应的消息从offlinemessage中删除掉
+        _offlineMessageModel.erase_for_group(userid, group_id);
+
+        return;
+    }
+    
+}
+
 // 从redis消息队列中获取订阅的消息
 void ChatService::handleRedisSubscribeMessage(int userid, string msg)
 {
     json js = json::parse(msg.c_str());
+
+    int from_ = js["id"].get<int>();
+    int fromgroup_ = -1;
+
+    // {"msgid": 12, "id": 19, "from": "shuoshuo", "togroup": 1, "msg": "wudongwei chulie!"}
+    if(js["msgid"] == 12)  // 说明是群聊消息
+    {
+        fromgroup_ = js["togroup"].get<int>();
+    }
 
     unique_lock<mutex> lock(_connMutex);
     cerr << msg << endl;
@@ -558,6 +635,8 @@ void ChatService::handleRedisSubscribeMessage(int userid, string msg)
         return;
     }
 
+    int to_ = userid;
+
     // 存储该用户的离线消息
-    _offlineMessageModel.insert(userid, msg);
+    _offlineMessageModel.insert(to_, from_, fromgroup_, msg);
 }

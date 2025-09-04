@@ -65,12 +65,18 @@ public:
     // 用户退出登录
     void loginout(const TcpConnectionPtr& conn, json& js, Timestamp);
 
+    // 将未访问的离线消息写入offlinemessage中
+    void insertOfflineMessage(const TcpConnectionPtr& conn, json& js, Timestamp);
+
+    // 返回用户的离线消息
+    void returnOfflineMessage(const TcpConnectionPtr& conn, json& js, Timestamp);
+
     // 服务器异常，业务重置方法
     void reset();
 
     // 从redis消息队列中获取订阅消息
     void handleRedisSubscribeMessage(int userid, string msg);
-
+  
     // 获取消息对应的处理器
     MsgHandler getHandler(int msgid);
 
@@ -91,7 +97,8 @@ private:
     UserModel _userModel;
 
     // 离线信息操作类对象
-    OfflineMessageModel _offlineMessageModel;
+    // OfflineMessageModel _offlineMessageModel;
+    OfflineMessageModel_v2 _offlineMessageModel;
 
     // 好友信息操作类对象
     FriendModel _friendModel;
