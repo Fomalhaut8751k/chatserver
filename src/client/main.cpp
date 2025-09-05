@@ -333,23 +333,12 @@ void mainMenu(int id, string name, bool& user_online, int clientfd)
 
             int len = send(clientfd, request_str.c_str(), strlen(request_str.c_str()) + 1, 0);
 
-            // if(len >= 1)
-            // {
-            //     cerr << "added friend successfully!!!" << endl;
-            //     pauseProgram();
-            //     system("clear"); 
-            // }
-
-            char buffer[1024] = {0};
-            len = recv(clientfd, buffer, 1024, 0);
-            if(len > 1 && json::parse(buffer)["errno"] == 0)
             {
-                cerr << "added friend successfully!!!" << endl;
+                std::unique_lock<std::mutex> lck(mtx);
+                cv.wait(lck);  // 等待，先阻塞，等消息接收线程处理完毕   
             }
-            else
-            {
-                cerr << "added friend failed!!!" << endl;
-            }
+            pauseProgram();
+            system("clear");
 
         }break;
         case 4:  // 添加群组
@@ -370,6 +359,13 @@ void mainMenu(int id, string name, bool& user_online, int clientfd)
             cerr << request_str << endl;
 
             int len = send(clientfd, request_str.c_str(), strlen(request_str.c_str()) + 1, 0);
+
+            {
+                std::unique_lock<std::mutex> lck(mtx);
+                cv.wait(lck);  // 等待，先阻塞，等消息接收线程处理完毕   
+            }
+            pauseProgram();
+            system("clear");
 
         }break;
         case 5:  // 加入群聊
@@ -394,6 +390,13 @@ void mainMenu(int id, string name, bool& user_online, int clientfd)
             string request_str = js.dump();
 
             int len = send(clientfd, request_str.c_str(), strlen(request_str.c_str()) + 1, 0);
+
+            {
+                std::unique_lock<std::mutex> lck(mtx);
+                cv.wait(lck);  // 等待，先阻塞，等消息接收线程处理完毕   
+            }
+            pauseProgram();
+            system("clear");
 
         }break;
         default:  // 退出
@@ -693,23 +696,10 @@ void groupMenu(int id, string name, bool& show_group, int clientfd)
                     groupChatMenu(group, name, id, clientfd, chat_group);
                 }
 
-                // {"msgid": 12, "id": 17, "from": "van", "togroup": 2, "msg": "I am an artist"}
-                // {"msgid": 5, "id": 19, "from": "bili", "to": 17, "msg": "wushuangdahuanggua"}
                 system("clear"); 
 
                 status["group"] = -1;
 
-                // json js_exit;
-                // js_exit["msgid"] = 5;
-                // js_exit["id"] = id;
-                // js_exit["from"] = "";
-                // js_exit["to"] = id;
-                // js_exit["msg"] = "exit()";
-
-                // string request_exit = js_exit.dump();
-                // len = send(clientfd, request_exit.c_str(), strlen(request_exit.c_str()) + 1, 0);
-
-                // readTask.join();
 
             }break;
             case 2:
@@ -831,63 +821,6 @@ Group getMsgFromGroupString(string msg_str)
 
 }
 
-// 单人聊天接收线程
-void readTaskHandler(int clientfd)
-{
-    while(1)
-    {
-        char buffer[1024] = {0};
-        // {"msgid": 5, "id": 19, "from": "van", "to": 17, "msg": "111"}
-        int len = recv(clientfd, buffer, 1024, 0);
-        if(len == -1 || len == 0)
-        {
-            close(clientfd);
-            exit(-1);
-        }
-
-        json js = json::parse(buffer);
-        if(js["msg"] == "exit()") 
-        {
-            break;
-        }
-        if(ONE_CHAT_MSG == js["msgid"].get<int>())
-        {
-            // {"msgid": 5, "id": 19, "from": "苻坚", "to": 17, "msg": "昔朕以龙骧建业，未尝轻以授人，卿其勉之"}
-            cerr << "[" << js["from"] << "]: " << js["msg"] << endl; 
-            cerr << "> ";
-        }
-    }
-}
-
-// 多人聊天接受线程
-void readGroupTaskHandler(int clientfd, int id)
-{
-    while(1)
-    {
-        char buffer[1024] = {0};
-        
-        int len = recv(clientfd, buffer, 1024, 0);
-        if(len == -1 || len == 0)
-        {
-            close(clientfd);
-            exit(-1);
-        }
-
-        json js = json::parse(buffer);
-
-        if(js["msg"] == "exit()" && js["id"] == id) 
-        {
-            break;
-        }
-        if(GROUP_CHAT_MSG == js["msgid"].get<int>())
-        {
-            // {"msgid": 12, "id": 17, "from": "van", "togroup": 2, "msg": "123"}
-            cerr << "[" << js["from"] << "]: " << js["msg"] << endl; 
-            cerr << "> ";
-        }
-    }
-}
-
 // 聊天消息和响应消息处理线程
 void chatAndResponseHandler(int clientfd, int id)
 {
@@ -963,14 +896,15 @@ void chatAndResponseHandler(int clientfd, int id)
                 // 添加好友响应  msgid = 7
                 if(js["msgid"] == ADD_FRIEND_ACK)
                 {
-                    if(js["errno"] == 0)
+                    if(js["errno"] == 0)  // 添加好友成功
                     {
-                        cerr << "added friend successfully!!!" << endl;
+                        cerr << js["msg"] << endl;
                     }
-                    else
+                    else  // 添加好友失败
                     {
-                        cerr << "added friend failed!!!" << endl;
+                        cerr << js["errmsg"] << endl;
                     }
+                    cv.notify_all(); // 唤醒主线程
                 }
                 // 查看好友列表响应 msgid = 8
                 else if(js["msgid"] == SHOW_FRIEND_ACK)
@@ -994,19 +928,26 @@ void chatAndResponseHandler(int clientfd, int id)
                     cerr << index << " people in total." << endl;
                     cv.notify_all(); // 唤醒主线程
                 }
-                // 创建或添加群聊业务响应 msgid = 10
+                // 创建群聊业务响应 msgid = 10
                 else if(js["msgid"] == CREATE_GROUP_ASK)
                 {
                     if(json::parse(buffer_substr)["errno"] == 0)
                     {
                         cerr << "successfully!!!" << endl;
+                        cerr << "id: " << id << " create group name " << js["name"] << endl; 
                     }
                     else
                     {
                         cerr << "failed!!!" << endl;
                     }
+                    cv.notify_all(); // 唤醒主线程
                 }
-
+                // 添加群聊业务响应 msgid = 18
+                else if(js["msgid"]  == ADD_GROUP_ASK)
+                {
+                    cerr << js["msg"] << endl;
+                    cv.notify_all(); // 唤醒主线程
+                }
                 // 查看所有群聊响应 msgid = 14
                 else if(js["msgid"] == CHECK_MY_GROUP)
                 {

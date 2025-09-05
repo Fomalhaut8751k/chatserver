@@ -33,6 +33,7 @@ enum EnMsgType
 
     OFFLINE_MSG_INSERT, // 插入离线消息        16
     OFFLINE_MSG_GET,    // 获取离线消息        17
+    ADD_GROUP_ASK,      // 加入群聊响应        18
 };
 
 

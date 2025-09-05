@@ -338,6 +338,7 @@ void ChatService::createGroup(const TcpConnectionPtr& conn, json& js, Timestamp)
 
     json response;
     response["msgid"] = CREATE_GROUP_ASK;
+    response["name"] = group_name;
     response["errno"] = 0;
     response["msg"] = "successfully created group!!!";
 
@@ -357,13 +358,15 @@ void ChatService::addGroup(const TcpConnectionPtr& conn, json& js, Timestamp)
 
     string user_name = js["name"];
 
-    // 加入群组并成为管理员
+    // 加入群组并成为普通用户
     _groupModel.addGroup(userid, groupid, "normal");
 
     json response;
-    response["msgid"] = 10;
+    response["msgid"] = ADD_GROUP_ASK;
     response["errno"] = 0;
     response["msg"] = user_name + "joined the group chat";
+
+    conn->send(response.dump());
 }
 
 
